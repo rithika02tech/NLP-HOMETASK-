@@ -1,0 +1,96 @@
+import nltk
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk import pos_tag, ne_chunk
+from nltk.chunk import tree2conlltags
+from nltk.classify import NaiveBayesClassifier
+from nltk.metrics import precision
+from nltk.probability import FreqDist
+from nltk.util import bigrams, trigrams
+from nltk.sem import Expression
+
+news = """
+Microsoft announced a new AI platform in Chennai.
+The company expects the technology to improve business productivity.
+"""
+
+tokens = word_tokenize(news)
+pos_tags = pos_tag(tokens)
+
+for word, tag in pos_tags:
+    if word == "Microsoft":
+        print("Subject :", word)
+    elif word == "announced":
+        print("Verb :", word)
+
+print("Object : AI platform")
+
+
+
+chunked = ne_chunk(pos_tags)
+
+for subtree in chunked:
+    if hasattr(subtree, 'label'):
+        entity = " ".join(c[0] for c in subtree)
+        print(subtree.label(), ":", entity)
+
+
+def features(text):
+    words = word_tokenize(text.lower())
+    return {word: True for word in words}
+
+train_data = [
+    (features("football match cricket tournament"), "Sports"),
+    (features("election government minister parliament"), "Politics"),
+    (features("stock market business finance"), "Business"),
+    (features("AI software computer technology"), "Technology")
+]
+
+classifier = NaiveBayesClassifier.train(train_data)
+
+category = classifier.classify(features(news))
+
+print(category)
+
+test_set = [
+    (features("AI technology software"), "Technology"),
+    (features("cricket football"), "Sports")
+]
+
+accuracy = nltk.classify.accuracy(classifier, test_set)
+
+
+print(round(accuracy * 100, 2), "%")
+
+
+refset = {'Technology'}
+testset = {category}
+
+print("Precision :", precision(refset, testset))
+
+
+words = [w.lower() for w in word_tokenize(news) if w.isalpha()]
+
+fdist = FreqDist(words)
+
+for word, freq in fdist.items():
+    print(word, ":", freq)
+
+total_words = len(words)
+
+for word in fdist:
+    print(f"P({word}) = {fdist[word]}/{total_words} = {fdist[word]/total_words:.2f}")
+
+
+read_expr = Expression.fromstring
+
+expr1 = read_expr('technology(productivity)')
+expr2 = read_expr('ai(technology)')
+
+print("Semantic Expression 1 :", expr1)
+print("Semantic Expression 2 :", expr2)
+
+for bg in bigrams(words):
+    print(bg)
+
+for tg in trigrams(words):
+    print(tg)
