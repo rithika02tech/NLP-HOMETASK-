@@ -1,0 +1,51 @@
+import nltk
+import string
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.probability import FreqDist
+import matplotlib.pyplot as plt
+
+nltk.download('punkt')
+nltk.download('stopwords')
+
+articles = [
+    "Cyber security protects digital systems from online threats and attacks",
+    "Modern technology requires strong cyber security methods and data protection",
+    "Organizations are improving security measures using advanced technology solutions",
+    "Digital safety is becoming important with the growth of internet services"
+]
+
+text = " ".join(articles).lower()
+
+text = text.translate(str.maketrans('', '', string.punctuation))
+
+tokens = word_tokenize(text)
+
+stop_words = set(stopwords.words('english'))
+tokens = [word for word in tokens if word not in stop_words]
+
+freq_dist = FreqDist(tokens)
+
+vocabulary = set(tokens)
+
+top5 = freq_dist.most_common(5)
+
+ttr = len(vocabulary) / len(tokens)
+
+dominant_topic = top5[0][0]
+
+print("Tokens:", tokens)
+print("Word Frequency:", freq_dist)
+print("Vocabulary:", vocabulary)
+print("Top 5 Words:", top5)
+print("Type-Token Ratio:", round(ttr, 2))
+print("Dominant Topic:", dominant_topic)
+
+words = [word for word, freq in top5]
+freqs = [freq for word, freq in top5]
+
+plt.bar(words, freqs)
+plt.xlabel("Words")
+plt.ylabel("Frequency")
+plt.title("Top 5 Frequent Words")
+plt.show()
