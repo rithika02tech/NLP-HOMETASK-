@@ -1,0 +1,170 @@
+from collections import defaultdict
+import math
+
+class SparseFiveGramKN:
+
+    def __init__(self, discount=0.75):
+        self.discount = discount
+        self.order = 5
+        self.ngram_count = [defaultdict(int) for _ in range(self.order)]
+        self.context_count = [defaultdict(int) for _ in range(self.order)]
+        self.follow = [defaultdict(set) for _ in range(self.order)]
+        self.precede = defaultdict(set)
+        self.vocab = set(["<UNK>"])
+
+    def train(self, corpus):
+
+        for sentence in corpus:
+
+            words = sentence.lower().split()
+            self.vocab.update(words)
+
+            tokens = ["<s>"] * 4 + words + ["</s>"]
+
+            for n in range(1, 6):
+
+                for i in range(len(tokens) - n + 1):
+
+                    gram = tuple(tokens[i:i+n])
+                    self.ngram_count[n-1][gram] += 1
+
+                    if n > 1:
+                        history = gram[:-1]
+                        self.context_count[n-1][history] += 1
+                        self.follow[n-1][history].add(gram[-1])
+
+                    if n == 2:
+                        self.precede[gram[1]].add(gram[0])
+
+    def continuation(self, word):
+
+        return len(self.precede[word]) / max(len(self.ngram_count[1]), 1)
+
+    def probability(self, history, word):
+
+        if len(history) == 0:
+            return self.continuation(word)
+
+        if len(history) > 4:
+            history = history[-4:]
+
+        n = len(history) + 1
+
+        gram = tuple(history + [word])
+
+        c = self.ngram_count[n-1].get(gram, 0)
+
+        h = tuple(history)
+
+        hc = self.context_count[n-1].get(h, 0)
+
+        if hc == 0:
+            return self.probability(history[1:], word)
+
+        first = max(c - self.discount, 0) / hc
+
+        lam = (self.discount * len(self.follow[n-1].get(h, []))) / hc
+
+        return first + lam * self.probability(history[1:], word)
+
+    def predict(self, text, top=5):
+
+        tokens = text.lower().split()
+
+        history = tokens[-4:]
+
+        scores = []
+
+        for word in self.vocab:
+
+            if word in ("<s>",):
+                continue
+
+            p = self.probability(history, word)
+
+            scores.append((word, p))
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+
+        return scores[:top]
+
+    def autocomplete(self, text, length=5):
+
+        result = text.lower().split()
+
+        for _ in range(length):
+
+            nxt = self.predict(" ".join(result), 1)
+
+            if not nxt:
+                break
+
+            word = nxt[0][0]
+
+            if word == "</s>":
+                break
+
+            result.append(word)
+
+        return " ".join(result)
+
+    def add_query(self, query):
+
+        words = query.lower().split()
+
+        self.vocab.update(words)
+
+        tokens = ["<s>"] * 4 + words + ["</s>"]
+
+        for n in range(1, 6):
+
+            for i in range(len(tokens) - n + 1):
+
+                gram = tuple(tokens[i:i+n])
+
+                self.ngram_count[n-1][gram] += 1
+
+                if n > 1:
+
+                    history = gram[:-1]
+
+                    self.context_count[n-1][history] += 1
+
+                    self.follow[n-1][history].add(gram[-1])
+
+                if n == 2:
+                    self.precede[gram[1]].add(gram[0])
+
+    def add_oov(self, token):
+
+        self.vocab.add(token.lower())
+
+
+corpus = [
+    "best places to visit in india",
+    "best places to visit in chennai",
+    "best places to visit near me",
+    "best places to visit during summer",
+    "best restaurants near me",
+    "best restaurants in chennai",
+    "best tourist places in india",
+    "cheap hotels near airport",
+    "top attractions in tamil nadu",
+    "best cafes in bangalore",
+    "new iphone launch event",
+    "ai tools for students"
+]
+
+model = SparseFiveGramKN()
+
+model.train(corpus)
+
+print(model.predict("best places to visit"))
+
+print(model.autocomplete("best places to visit"))
+
+model.add_oov("visionpro")
+
+model.add_query("best places to visit with visionpro")
+
+print(model.predict("best places to visit"))
