@@ -1,0 +1,289 @@
+import os
+import glob
+import random
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    classification_report,
+)
+
+random.seed(7)
+np.random.seed(7)
+
+UPLOAD_DIR = "/mnt/user-data/uploads"
+
+
+class CorpusLoader:
+
+    UNIVERSAL_VOCAB = {
+        "DET": ["the", "a", "an", "this", "some", "every"],
+        "NOUN": [
+            "teacher",
+            "laptop",
+            "village",
+            "coffee",
+            "bridge",
+            "movie",
+            "engineer",
+            "kitchen",
+            "planet",
+            "garden",
+            "signal",
+            "notebook",
+        ],
+        "PROPN": ["Kavya", "Chennai", "Amazon", "Rahul", "Paris", "Netflix"],
+        "PRON": ["he", "she", "they", "we", "it", "you", "i"],
+        "VERB": [
+            "build",
+            "builds",
+            "built",
+            "building",
+            "watch",
+            "watches",
+            "watched",
+            "watching",
+            "explain",
+            "explains",
+            "explained",
+        ],
+        "ADJ": ["clever", "tiny", "ancient", "bright", "curious", "loyal"],
+        "ADV": ["carefully", "rarely", "soon", "quietly", "often"],
+        "ADP": ["beside", "through", "before", "without", "near", "toward"],
+        "CONJ": ["and", "yet", "or", "because"],
+        "NUM": ["two", "five", "twelve", "hundred"],
+        "PRT": ["to"],
+        "PUNCT": [".", "!", "?"],
+    }
+
+    GRAMMAR_TEMPLATES = [
+        ["PRON", "VERB", "DET", "ADJ", "NOUN", "PUNCT"],
+        ["PROPN", "VERB", "ADP", "DET", "NOUN", "PUNCT"],
+        ["DET", "ADJ", "NOUN", "VERB", "ADV", "PUNCT"],
+        ["PRON", "VERB", "PRT", "VERB", "DET", "NOUN", "PUNCT"],
+        ["PROPN", "CONJ", "PROPN", "VERB", "DET", "NOUN", "PUNCT"],
+        ["DET", "NOUN", "VERB", "NUM", "NOUN", "PUNCT"],
+        ["PRON", "ADV", "VERB", "DET", "NOUN", "PUNCT"],
+        ["DET", "NOUN", "ADP", "DET", "ADJ", "NOUN", "PUNCT"],
+    ]
+
+    def __init__(self, upload_dir=UPLOAD_DIR):
+        self.upload_dir = upload_dir
+
+    def _try_kaggle_csv(self):
+        for path in glob.glob(os.path.join(self.upload_dir, "*.csv")):
+            try:
+                frame = pd.read_csv(path, encoding="latin1")
+            except Exception:
+                continue
+
+            lowered = {c.lower().strip(): c for c in frame.columns}
+
+            if (
+                "sentence #" in lowered
+                and "word" in lowered
+                and ("pos" in lowered or "tag" in lowered)
+            ):
+                sent_col = lowered["sentence #"]
+                word_col = lowered["word"]
+                tag_col = lowered.get("pos", lowered.get("tag"))
+
+                frame[sent_col] = frame[sent_col].ffill()
+
+                built = []
+                for _, chunk in frame.groupby(sent_col, sort=False):
+                    pairs = list(
+                        zip(
+                            chunk[word_col].astype(str).str.lower(),
+                            chunk[tag_col].astype(str),
+                        )
+                    )
+                    if pairs:
+                        built.append(pairs)
+
+                print(
+                    f"[CorpusLoader] Loaded Kaggle file '{path}' -> {len(built)} sentences"
+                )
+                return built
+
+        return None
+
+    def _synthesize(self, n=4000):
+        corpus = []
+        for _ in range(n):
+            template = random.choice(self.GRAMMAR_TEMPLATES)
+            sentence = [
+                (random.choice(self.UNIVERSAL_VOCAB[tag]), tag)
+                for tag in template
+            ]
+            corpus.append(sentence)
+        return corpus
+
+    def load(self):
+        data = self._try_kaggle_csv()
+
+        if data is None:
+            print(
+                "[CorpusLoader] No Kaggle CSV found -> generating synthetic Universal-Tagset corpus"
+            )
+            data = self._synthesize()
+
+        return data
+
+
+class HMMPOSTagger:
+    def __init__(self, smoothing=1.0):
+        self.smoothing = smoothing
+        self.tag2idx = {}
+        self.tags = []
+        self.word2idx = {}
+        self.log_pi = None
+        self.log_A = None
+        self.log_B = None
+
+    def fit(self, tagged_sentences):
+        self.tags = sorted(
+            {tag for sent in tagged_sentences for _, tag in sent}
+        )
+        self.tag2idx = {t: i for i, t in enumerate(self.tags)}
+        n_tags = len(self.tags)
+
+        vocab = sorted(
+            {w for sent in tagged_sentences for w, _ in sent}
+        )
+        self.word2idx = {w: i for i, w in enumerate(vocab)}
+        self.word2idx["<OOV>"] = len(self.word2idx)
+        n_words = len(self.word2idx)
+
+        pi_counts = np.zeros(n_tags)
+        A_counts = np.zeros((n_tags, n_tags))
+        B_counts = np.zeros((n_tags, n_words))
+
+        for sent in tagged_sentences:
+            pi_counts[self.tag2idx[sent[0][1]]] += 1
+
+            for i, (word, tag) in enumerate(sent):
+                r = self.tag2idx[tag]
+                c = self.word2idx.get(word, self.word2idx["<OOV>"])
+                B_counts[r, c] += 1
+
+                if i > 0:
+                    prev_r = self.tag2idx[sent[i - 1][1]]
+                    A_counts[prev_r, r] += 1
+
+        k = self.smoothing
+
+        pi = (pi_counts + k) / (pi_counts.sum() + k * n_tags)
+        A = (A_counts + k) / (
+            A_counts.sum(axis=1, keepdims=True) + k * n_tags
+        )
+        B = (B_counts + k) / (
+            B_counts.sum(axis=1, keepdims=True) + k * n_words
+        )
+
+        self.log_pi = np.log(pi)
+        self.log_A = np.log(A)
+        self.log_B = np.log(B)
+
+        return self
+
+    def decode(self, tokens):
+        n_tags = len(self.tags)
+        T = len(tokens)
+
+        obs = np.array(
+            [self.word2idx.get(w, self.word2idx["<OOV>"]) for w in tokens]
+        )
+
+        delta = np.empty((T, n_tags))
+        psi = np.zeros((T, n_tags), dtype=int)
+
+        delta[0] = self.log_pi + self.log_B[:, obs[0]]
+
+        for t in range(1, T):
+            trans_scores = delta[t - 1][:, None] + self.log_A
+            psi[t] = trans_scores.argmax(axis=0)
+            delta[t] = (
+                trans_scores.max(axis=0) + self.log_B[:, obs[t]]
+            )
+
+        best_path = np.empty(T, dtype=int)
+        best_path[-1] = delta[-1].argmax()
+
+        for t in range(T - 2, -1, -1):
+            best_path[t] = psi[t + 1, best_path[t + 1]]
+
+        return [self.tags[i] for i in best_path]
+
+
+def main():
+    corpus = CorpusLoader().load()
+    random.shuffle(corpus)
+
+    cutoff = int(0.8 * len(corpus))
+    train_data = corpus[:cutoff]
+    test_data = corpus[cutoff:]
+
+    print(
+        f"Train: {len(train_data)} sentences | Test: {len(test_data)} sentences"
+    )
+
+    tagger = HMMPOSTagger(smoothing=1.0).fit(train_data)
+
+    gold_tags = []
+    predicted_tags = []
+
+    for sent in test_data:
+        tokens = [w for w, _ in sent]
+        gold = [t for _, t in sent]
+        pred = tagger.decode(tokens)
+
+        gold_tags.extend(gold)
+        predicted_tags.extend(pred)
+
+    acc = accuracy_score(gold_tags, predicted_tags)
+
+    prec, rec, f1, _ = precision_recall_fscore_support(
+        gold_tags,
+        predicted_tags,
+        average="weighted",
+        zero_division=0,
+    )
+
+    print("\n===== EVALUATION =====")
+    print(f"Accuracy : {acc:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall   : {rec:.4f}")
+    print(f"F1-score : {f1:.4f}\n")
+
+    print(
+        classification_report(
+            gold_tags,
+            predicted_tags,
+            zero_division=0,
+        )
+    )
+
+    fresh_sentences = [
+        "she builds a tiny bridge",
+        "kavya and rahul watched the ancient movie",
+        "he carefully explains the signal",
+        "the engineer built twelve laptops",
+        "they rarely travel beside the garden",
+    ]
+
+    print("===== UNSEEN SENTENCE PREDICTIONS =====")
+
+    for sentence in fresh_sentences:
+        tokens = sentence.lower().split()
+        tags_out = tagger.decode(tokens)
+
+        print(f"\n> {sentence}")
+
+        for w, t in zip(tokens, tags_out):
+            print(f"    {w:12s}: {t}")
+
+
+if __name__ == "__main__":
+    main()
