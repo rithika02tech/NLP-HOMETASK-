@@ -1,0 +1,140 @@
+import pandas as pd
+import numpy as np
+import re
+import string
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
+file_path = "IMDB_Dataset_19500.csv"
+
+try:
+    df = pd.read_csv(file_path)
+    print('Dataset loaded successfully!')
+    print('Shape:', df.shape)
+    print(df.head())
+except FileNotFoundError:
+    print(f'File not found: {file_path}. Please download the IMDb dataset from Kaggle and place it in the project folder.')
+
+print('Columns:', df.columns.tolist())
+print('\nMissing values:')
+print(df.isnull().sum())
+
+print('\nClass distribution:')
+print(df['sentiment'].value_counts())
+
+plt.figure(figsize=(6, 4))
+sns.countplot(x='sentiment', data=df)
+plt.title('Sentiment Distribution')
+plt.show()
+
+stop_words = set(stopwords.words('english'))
+lemmatizer = WordNetLemmatizer()
+
+def clean_review(text):
+    text = text.lower()
+    text = re.sub(r"<.*?>", " ", text)
+    text = re.sub(r"[^a-z\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    tokens = nltk.word_tokenize(text)
+    tokens = [word for word in tokens if word not in stop_words]
+    tokens = [lemmatizer.lemmatize(word) for word in tokens]
+    return ' '.join(tokens)
+
+print(clean_review('This movie was AMAZING! The plot was fun, and the acting was superb.'))
+
+df['cleaned_review'] = df['review'].apply(clean_review)
+print(df[['review', 'cleaned_review']].head())
+
+vectorizer = TfidfVectorizer(max_features=15000, ngram_range=(1, 2))
+X = vectorizer.fit_transform(df['cleaned_review'])
+y = df['sentiment'].map({'positive': 1, 'negative': 0})
+
+print('TF-IDF shape:', X.shape)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+models = {
+    'Naive Bayes': MultinomialNB(),
+    'Logistic Regression': LogisticRegression(max_iter=1000),
+    'Linear SVM': LinearSVC(max_iter=10000)
+}
+
+trained_models = {}
+
+for name, model in models.items():
+    print(f'Training {name}...')
+    model.fit(X_train, y_train)
+    trained_models[name] = model
+
+print('Training completed.')
+
+results = []
+
+for name, model in trained_models.items():
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
+
+    print(f'--- {name} ---')
+    print(f'Accuracy: {acc:.4f}')
+    print(classification_report(y_test, y_pred))
+
+    cm = confusion_matrix(y_test, y_pred)
+
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'{name} Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.show()
+
+    results.append({
+        'model': name,
+        'accuracy': acc,
+        'precision': report['weighted avg']['precision'],
+        'recall': report['weighted avg']['recall'],
+        'f1_score': report['weighted avg']['f1-score']
+    })
+
+results_df = pd.DataFrame(results).sort_values(by='accuracy', ascending=False)
+
+print(results_df)
+
+best_model_name = results_df.iloc[0]['model']
+best_model = trained_models[best_model_name]
+
+print('Best model:', best_model_name)
+
+def predict_sentiment(review_text, model=best_model):
+    cleaned = clean_review(review_text)
+    vectorized = vectorizer.transform([cleaned])
+    prediction = model.predict(vectorized)[0]
+    return 'Positive' if prediction == 1 else 'Negative'
+
+sample_reviews = [
+    'I absolutely loved this movie. The story was amazing and the actors did a great job.',
+    'The plot was boring, and the acting was not good. I would not recommend this film.'
+]
+
+for review in sample_reviews:
+    print(f'Review: {review}')
+    print('Predicted sentiment:', predict_sentiment(review))
+    print()
