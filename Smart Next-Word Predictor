@@ -1,0 +1,68 @@
+import re
+from collections import Counter, defaultdict
+
+with open("wiki.train.tokens", "r", encoding="utf-8") as file:
+    text = file.read().lower()
+
+text = re.sub(r"[^a-zA-Z\s]", " ", text)
+tokens = text.split()
+
+unigram = Counter(tokens)
+bigram = Counter(zip(tokens, tokens[1:]))
+trigram = Counter(zip(tokens, tokens[1:], tokens[2:]))
+
+bigram_next = defaultdict(Counter)
+trigram_next = defaultdict(Counter)
+
+for (w1, w2), count in bigram.items():
+    bigram_next[w1][w2] = count
+
+for (w1, w2, w3), count in trigram.items():
+    trigram_next[(w1, w2)][w3] = count
+
+
+def predict_next_word(sentence, top_n=5):
+    words = re.findall(r"[a-zA-Z]+", sentence.lower())
+
+    if not words:
+        return []
+
+    candidates = Counter()
+
+    if len(words) >= 2:
+        previous_words = (words[-2], words[-1])
+
+        for word, count in trigram_next[previous_words].items():
+            candidates[word] += count * 3
+
+    previous_word = words[-1]
+
+    for word, count in bigram_next[previous_word].items():
+        candidates[word] += count * 2
+
+    for word, count in unigram.items():
+        candidates[word] += count * 0.1
+
+    total = sum(candidates.values())
+
+    predictions = []
+
+    for word, score in candidates.most_common(top_n):
+        probability = score / total
+        predictions.append((word, probability))
+
+    return predictions
+
+
+while True:
+    sentence = input("\nEnter a sentence or partial sentence: ")
+
+    if sentence.lower() == "exit":
+        break
+
+    predictions = predict_next_word(sentence, 5)
+
+    print("\nTop Next-Word Predictions:")
+
+    for i, (word, probability) in enumerate(predictions, 1):
+        print(f"{i}. {word} - {probability:.3f}")
