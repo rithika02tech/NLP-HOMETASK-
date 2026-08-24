@@ -1,0 +1,130 @@
+import pandas as pd
+import numpy as np
+from collections import defaultdict, Counter
+
+# Load Universal Dependencies - English EWT dataset
+df = pd.read_csv("en_ewt.csv")
+
+# Expected columns: sentence_id, word, upos
+df = df.dropna(subset=["word", "upos"])
+
+# HMM probabilities
+transition_counts = defaultdict(Counter)
+emission_counts = defaultdict(Counter)
+tag_counts = Counter()
+
+# Start tag
+START = "<START>"
+
+# Group words by sentence
+sentences = df.groupby("sentence_id")
+
+for _, sentence in sentences:
+    previous_tag = START
+
+    for _, row in sentence.iterrows():
+        word = str(row["word"]).lower()
+        tag = str(row["upos"])
+
+        transition_counts[previous_tag][tag] += 1
+        emission_counts[tag][word] += 1
+        tag_counts[tag] += 1
+
+        previous_tag = tag
+
+# Convert counts to probabilities
+transition_prob = defaultdict(dict)
+emission_prob = defaultdict(dict)
+
+for prev_tag, counts in transition_counts.items():
+    total = sum(counts.values())
+
+    for tag, count in counts.items():
+        transition_prob[prev_tag][tag] = count / total
+
+for tag, counts in emission_counts.items():
+    total = tag_counts[tag]
+
+    for word, count in counts.items():
+        emission_prob[tag][word] = count / total
+
+tags = list(tag_counts.keys())
+
+# HMM POS Tagger using Viterbi algorithm
+def viterbi(words):
+    words = [word.lower() for word in words]
+
+    viterbi_table = []
+    backpointer = []
+
+    # Initialization
+    first_word = words[0]
+    current = {}
+    current_back = {}
+
+    for tag in tags:
+        transition = transition_prob[START].get(tag, 0)
+        emission = emission_prob[tag].get(first_word, 1e-6)
+
+        current[tag] = transition * emission
+        current_back[tag] = None
+
+    viterbi_table.append(current)
+    backpointer.append(current_back)
+
+    # Recursion
+    for word in words[1:]:
+        current = {}
+        current_back = {}
+
+        for tag in tags:
+            emission = emission_prob[tag].get(word, 1e-6)
+
+            best_prob = 0
+            best_previous = None
+
+            for previous_tag in viterbi_table[-1]:
+                transition = transition_prob[previous_tag].get(tag, 1e-6)
+
+                probability = (
+                    viterbi_table[-1][previous_tag]
+                    * transition
+                    * emission
+                )
+
+                if probability > best_prob:
+                    best_prob = probability
+                    best_previous = previous_tag
+
+            current[tag] = best_prob
+            current_back[tag] = best_previous
+
+        viterbi_table.append(current)
+        backpointer.append(current_back)
+
+    # Backtracking
+    best_last_tag = max(
+        viterbi_table[-1],
+        key=viterbi_table[-1].get
+    )
+
+    best_tags = [best_last_tag]
+
+    for i in range(len(words) - 1, 0, -1):
+        best_tags.append(backpointer[i][best_tags[-1]])
+
+    best_tags.reverse()
+
+    return list(zip(words, best_tags))
+
+
+# Test sentence
+sentence = "The quick brown fox jumps over the lazy dog"
+
+result = viterbi(sentence.split())
+
+print("Word\tPOS Tag")
+print("-" * 20)
+
+for word, tag in result:
+    print(f"{word}\t{tag}")
