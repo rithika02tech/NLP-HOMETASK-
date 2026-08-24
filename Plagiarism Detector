@@ -1,0 +1,62 @@
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import re
+
+# Load PAN Plagiarism Corpus dataset
+df = pd.read_csv("pan_plagiarism_corpus.csv")
+
+# Change column names if your dataset uses different names
+df = df.dropna(subset=["text"])
+
+# Text preprocessing
+def preprocess(text):
+    text = str(text).lower()
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+df["clean_text"] = df["text"].apply(preprocess)
+
+# TF-IDF vectorization
+vectorizer = TfidfVectorizer(
+    stop_words="english",
+    ngram_range=(1, 2),
+    max_features=10000
+)
+
+tfidf_matrix = vectorizer.fit_transform(df["clean_text"])
+
+# Cosine similarity
+similarity_matrix = cosine_similarity(tfidf_matrix)
+
+# Plagiarism threshold
+THRESHOLD = 0.70
+
+# Detect similar documents
+results = []
+
+for i in range(len(df)):
+    for j in range(i + 1, len(df)):
+        similarity = similarity_matrix[i][j]
+
+        if similarity >= THRESHOLD:
+            results.append({
+                "Document 1": i,
+                "Document 2": j,
+                "Similarity": round(similarity * 100, 2),
+                "Plagiarism": "Yes"
+            })
+
+# Results
+results_df = pd.DataFrame(results)
+
+if results_df.empty:
+    print("No plagiarism detected.")
+else:
+    print("Plagiarism detected:")
+    print(results_df.sort_values(
+        by="Similarity",
+        ascending=False
+    ).to_string(index=False))
